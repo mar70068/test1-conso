@@ -5,17 +5,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { 
-  Upload, 
-  FileText, 
-  Building2, 
-  Calendar,
-  CheckCircle2,
-  AlertCircle,
-  X,
-  Plus
-} from "lucide-react";
+import {  Upload, FileText, Building2, Calendar, CheckCircle2, AlertCircle, X, Plus } from "lucide-react";
+
+import { useCompanies } from "@/hooks/useSupabaseData";
 
 const mockCompanies = [
   { id: "1", name: "Acme Corp", code: "ACME" },
@@ -46,6 +38,8 @@ export function DataUpload() {
   const [dragActive, setDragActive] = useState(false);
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedPeriod, setSelectedPeriod] = useState("");
+    const { data: companies = [], isLoading: companiesLoading } = useCompanies();
+
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -135,7 +129,7 @@ export function DataUpload() {
                       <SelectValue placeholder="Select company" />
                     </SelectTrigger>
                     <SelectContent>
-                      {mockCompanies.map((company) => (
+                      {companies.map((company) => (
                         <SelectItem key={company.id} value={company.id}>
                           {company.name} ({company.code})
                         </SelectItem>
