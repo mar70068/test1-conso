@@ -1,35 +1,22 @@
-
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Edit, Trash2 } from "lucide-react";
+import { useAdjustments } from "@/hooks/useSupabaseData";
 
-// Mock data for demonstration
-const adjustmentData = [
-  {
-    id: 1,
-    date: "2025-06-14",
-    type: "Manual",
-    company: "Alpha Ltd",
-    account: "1000 - Cash",
-    amount: 1500,
-    currency: "USD",
-    description: "True-up adjustment",
-    createdBy: "Jane Doe",
-  },
-  {
-    id: 2,
-    date: "2025-06-15",
-    type: "Elimination",
-    company: "Beta Spa",
-    account: "2000 - IC Receivable",
-    amount: -2500,
-    currency: "EUR",
-    description: "Intercompany elimination",
-    createdBy: "John Smith",
-  },
-];
-
+/**
+ * Muestra la lista de ajustes financieros obtenidos desde Supabase.
+ */
 export default function AdjustmentTable() {
+  const { data: adjustments = [], isLoading, error } = useAdjustments();
+
+  // Mensajes de estado
+  if (isLoading) {
+    return <div>Loading adjustments…</div>;
+  }
+  if (error) {
+    return <div>Error loading adjustments</div>;
+  }
+
   return (
     <div className="bg-white rounded-lg shadow border p-4">
       <div className="flex items-center justify-between mb-4">
@@ -46,31 +33,37 @@ export default function AdjustmentTable() {
             <TableHead>Company</TableHead>
             <TableHead>Account</TableHead>
             <TableHead>Amount</TableHead>
+            <TableHead>Currency</TableHead>
             <TableHead>Description</TableHead>
             <TableHead>Created By</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {adjustmentData.map((adj) => (
+          {adjustments.map((adj) => (
             <TableRow key={adj.id}>
-              <TableCell>{adj.date}</TableCell>
+              <TableCell>{(adj as any).created_at ? String((adj as any).created_at).slice(0, 10) : ""}</TableCell>
               <TableCell>
-                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                  adj.type === "Elimination" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"
-                }`}>
+                <span
+                  className={`px-2 py-1 rounded text-xs font-medium ${
+                    adj.type === "elimination" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"
+                  }`}
+                >
                   {adj.type}
                 </span>
               </TableCell>
-              <TableCell>{adj.company}</TableCell>
-              <TableCell>{adj.account}</TableCell>
+              <TableCell>{(adj as any).company_id ?? ""}</TableCell>
+              <TableCell>{(adj as any).account_id ?? ""}</TableCell>
               <TableCell>
-                {adj.amount.toLocaleString(undefined, { style: "currency", currency: adj.currency })}
+                {typeof adj.amount === "number"
+                  ? adj.amount.toLocaleString(undefined, { style: "currency", currency: (adj as any).currency })
+                  : ""}
               </TableCell>
-              <TableCell>{adj.description}</TableCell>
-              <TableCell>{adj.createdBy}</TableCell>
-              <TableCell className="flex gap-1 justify-end">
-                <Button variant="outline" size="icon" disabled>
+              <TableCell>{(adj as any).currency}</TableCell>
+              <TableCell>{(adj as any).description}</TableCell>
+              <TableCell>{(adj as any).created_by}</TableCell>
+              <TableCell className="text-right">
+                <Button variant="outline" size="icon" className="mr-2" disabled>
                   <Edit className="w-4 h-4" />
                 </Button>
                 <Button variant="outline" size="icon" disabled>
