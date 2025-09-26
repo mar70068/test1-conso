@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { EnhancedDashboard } from "@/components/enhanced/EnhancedDashboard";
 import { DataUpload } from "@/components/DataUpload";
@@ -10,64 +10,128 @@ import AdjustmentTable from "@/components/AdjustmentTable";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { useAppState } from "@/hooks/useAppState";
 
-// Add consoAccounts definition to match ChartMapping, including the category
-const consoAccounts = [
-  { id: "co1", code: "CASH", label: "Cash and Cash Equivalents", category: "Current Assets" },
-  { id: "co2", code: "REV", label: "Revenue", category: "Income" },
-  { id: "co3", code: "AP", label: "Accounts Payable", category: "Current Liabilities" },
-];
-
-// Create mock amounts per company account, conso account, etc.
-// This array connects company to consoAccount with an amount
-const mockBalances = [
-  // companyId, accountId, consoAccountId, amount
-  { companyId: "1", companyAccount: "1001", consoAccountId: "co1", amount: 100000 },
-  { companyId: "1", companyAccount: "4000", consoAccountId: "co2", amount: 400000 },
-  { companyId: "2", companyAccount: "1001", consoAccountId: "co1", amount: 20000 },
-  { companyId: "2", companyAccount: "4000", consoAccountId: "co2", amount: 10000 },
-  { companyId: "3", companyAccount: "2001", consoAccountId: "co3", amount: 9000 },
-  { companyId: "3", companyAccount: "4000", consoAccountId: "co2", amount: 200000 },
-  { companyId: "4", companyAccount: "1001", consoAccountId: "co1", amount: 85000 },
-  { companyId: "4", companyAccount: "2001", consoAccountId: "co3", amount: 4000 },
-];
-
 const Index = () => {
   const [currentPage, setCurrentPage] = useState("dashboard");
-  const { state, activeSubconso, activeCompanies, actions } = useAppState();
+  const { state, activeSubconso, activeCompanies, actions, getExchangeRate } = useAppState();
+  const periodId = state.currentPeriod?.id || "";
+  const groupCurrency = state.currentPeriod?.currency || "";
 
-  // Helper: get companies in active subconso
-  const subconsoCompanies = activeCompanies;
-  // Group balances by category for the report
-  const balanceSheet: { [category: string]: { accounts: { code: string, label: string, amount: number }[], total: number } } = {};
-
-  subconsoCompanies.forEach(company => {
-    // For each company, get balances that match companyId
-    mockBalances.filter(b => b.companyId === company.id).forEach(entry => {
-      const conso = consoAccounts.find(ca => ca.id === entry.consoAccountId);
-      if (!conso) return;
-      if (!balanceSheet[conso.category]) {
-        balanceSheet[conso.category] = { accounts: [], total: 0 };
-      }
-      // Aggregate at account level under this category
-      let acct = balanceSheet[conso.category].accounts.find(a => a.code === conso.code);
-      if (!acct) {
-        acct = { code: conso.code, label: conso.label, amount: 0 };
-        balanceSheet[conso.category].accounts.push(acct);
-      }
-      acct.amount += entry.amount;
-      balanceSheet[conso.category].total += entry.amount;
+  const balanceData = useMemo(() => {
+    const mapping = new Map<string, string>();
+    state.chartMappings.forEach((item) => {
+      mapping.set(`${item.companyId}-${item.companyAccountCode}`, item.consolidatedAccountId);
     });
-  });
 
-  // For export: flatten as CSV
-  function exportCSV() {
-    let csv = "Category,Account Code,Account Label,Amount\n";
-    Object.keys(balanceSheet).forEach(cat => {
-      balanceSheet[cat].accounts.forEach(a => {
-        csv += `${cat},${a.code},${a.label},${a.amount}\n`;
+    const categories = new Map<
+      string,
+      {
+        accounts: Array<{ code: string; label: string; localBreakdown: Record<string, number>; groupAmount: number }>;
+        subtotal: number;
+      }
+    >();
+
+    const ensureAccount = (category: string, code: string, label: string) => {
+      const categoryRecord = categories.get(category) || { accounts: [], subtotal: 0 };
+      if (!categories.has(category)) {
+        categories.set(category, categoryRecord);
+      }
+      let accountRecord = categoryRecord.accounts.find((account) => account.code === code);
+      if (!accountRecord) {
+        accountRecord = { code, label, localBreakdown: {}, groupAmount: 0 };
+        categoryRecord.accounts.push(accountRecord);
+      }
+      return { categoryRecord, accountRecord };
+    };
+
+    const addAmount = (
+      category: string,
+      code: string,
+      label: string,
+      currency: string,
+      local: number,
+      group: number
+    ) => {
+      const { categoryRecord, accountRecord } = ensureAccount(category, code, label);
+      accountRecord.localBreakdown[currency] = (accountRecord.localBreakdown[currency] || 0) + local;
+      accountRecord.groupAmount += group;
+      categoryRecord.subtotal += group;
+    };
+
+    state.trialBalances
+      .filter(
+        (entry) =>
+          entry.period === periodId &&
+          activeSubconso.companyIds.includes(entry.companyId)
+      )
+      .forEach((entry) => {
+        const mappedAccountId = mapping.get(`${entry.companyId}-${entry.accountCode}`);
+        const account = mappedAccountId
+          ? state.accounts.find((item) => item.id === mappedAccountId)
+          : state.accounts.find((item) => item.code === entry.accountCode);
+        const accountCode = account?.code || entry.accountCode;
+        const accountLabel = account?.label || entry.accountName;
+        const category = account?.category || "Unmapped";
+        const currency = entry.currency;
+        const rate = getExchangeRate(currency, groupCurrency, entry.period);
+        const net = entry.debit - entry.credit;
+        addAmount(category, accountCode, accountLabel, currency, net, net * rate);
+      });
+
+    state.adjustments
+      .filter(
+        (adjustment) =>
+          adjustment.period === periodId &&
+          (adjustment.companyId === null || activeSubconso.companyIds.includes(adjustment.companyId))
+      )
+      .forEach((adjustment) => {
+        const account = state.accounts.find((item) => item.id === adjustment.accountId);
+        const accountCode = account?.code || adjustment.accountId;
+        const accountLabel = account?.label || "Adjustment";
+        const category = account?.category || "Adjustments";
+        addAmount(
+          category,
+          accountCode,
+          accountLabel,
+          adjustment.sourceCurrency,
+          adjustment.sourceAmount,
+          adjustment.groupAmount
+        );
+      });
+
+    const ordered = Array.from(categories.entries()).map(([category, value]) => ({
+      category,
+      accounts: value.accounts,
+      subtotal: value.subtotal,
+    }));
+
+    ordered.sort((a, b) => (a.category === b.category ? 0 : a.category.localeCompare(b.category)));
+
+    const total = ordered.reduce((sum, item) => sum + item.subtotal, 0);
+
+    return { categories: ordered, total };
+  }, [
+    state.chartMappings,
+    state.accounts,
+    state.trialBalances,
+    state.adjustments,
+    activeSubconso,
+    periodId,
+    getExchangeRate,
+    groupCurrency,
+  ]);
+
+  const exportCSV = () => {
+    let csv = "Category,Account Code,Account Label,Local Amounts,Group Amount";
+    csv += ` (${groupCurrency})\n`;
+    balanceData.categories.forEach((category) => {
+      category.accounts.forEach((account) => {
+        const localSummary = Object.entries(account.localBreakdown)
+          .map(([currency, amount]) => `${currency} ${amount}`)
+          .join(" | ");
+        csv += `${category.category},${account.code},${account.label},${localSummary},${account.groupAmount}\n`;
       });
     });
-    csv += `,,Total,${Object.values(balanceSheet).reduce((acc, cur) => acc + cur.total, 0)}\n`;
+    csv += `,,,Total,${balanceData.total}\n`;
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -75,7 +139,7 @@ const Index = () => {
     a.download = activeSubconso.name + "-balance-sheet.csv";
     a.click();
     URL.revokeObjectURL(url);
-  }
+  };
 
   const renderCurrentPage = () => {
     switch (currentPage) {
@@ -84,18 +148,18 @@ const Index = () => {
       case "upload":
         return <DataUpload />;
       case "config":
-        return <GroupConfiguration
-          companies={state.companies}
-          setCompanies={(companies) => {
-            // This would need to be refactored to use individual company updates
-            console.log("Bulk company update not implemented yet");
-          }}
-          subconsos={state.subconsos}
-          setSubconsos={(subconsos) => {
-            // This would need to be refactored to use individual subconso updates
-            console.log("Bulk subconso update not implemented yet");
-          }}
-        />;
+        return (
+          <GroupConfiguration
+            companies={state.companies}
+            setCompanies={(companies) => {
+              console.log("Bulk company update not implemented yet");
+            }}
+            subconsos={state.subconsos}
+            setSubconsos={(subconsos) => {
+              console.log("Bulk subconso update not implemented yet");
+            }}
+          />
+        );
       case "mapping":
         return <ChartMapping />;
       case "sheet":
@@ -115,53 +179,79 @@ const Index = () => {
               <select
                 className="border rounded px-3 py-2 text-base"
                 value={state.activeSubconsoId}
-                onChange={e => actions.setActiveSubconso(e.target.value)}
+                onChange={(event) => actions.setActiveSubconso(event.target.value)}
               >
-                {state.subconsos.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
+                {state.subconsos.map((subconso) => (
+                  <option key={subconso.id} value={subconso.id}>
+                    {subconso.name}
+                  </option>
                 ))}
               </select>
             </div>
             <div className="bg-white shadow border rounded-lg p-4">
-              <h3 className="text-lg font-semibold mb-4">{activeSubconso.name} Balance Sheet (By Category)</h3>
+              <h3 className="text-lg font-semibold mb-4">
+                {activeSubconso.name} Balance Sheet ({state.currentPeriod?.name})
+              </h3>
               <table className="w-full table-auto border">
                 <thead>
                   <tr className="bg-slate-50 text-slate-800 text-sm">
                     <th className="py-1 px-2 border">Category</th>
                     <th className="py-1 px-2 border">Account</th>
-                    <th className="py-1 px-2 border">Label</th>
-                    <th className="py-1 px-2 border text-right">Amount</th>
+                    <th className="py-1 px-2 border">Local amounts</th>
+                    <th className="py-1 px-2 border text-right">Group amount ({groupCurrency})</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.keys(balanceSheet).map(category => (
-                    <>
-                      {balanceSheet[category].accounts.map((acct, idx) => (
-                        <tr key={category + '_' + acct.code}>
-                          {idx === 0 && (
-                            <td className="border px-2 py-1" rowSpan={balanceSheet[category].accounts.length}>
-                              <span className="font-bold">{category}</span>
+                  {balanceData.categories.map((category) => (
+                    <Fragment key={category.category}>
+                      {category.accounts.map((account, index) => (
+                        <tr key={`${category.category}-${account.code}`}>
+                          {index === 0 && (
+                            <td className="border px-2 py-1" rowSpan={category.accounts.length}>
+                              <span className="font-bold">{category.category}</span>
                             </td>
                           )}
-                          <td className="border px-2 py-1">{acct.code}</td>
-                          <td className="border px-2 py-1">{acct.label}</td>
-                          <td className="border px-2 py-1 text-right">{acct.amount.toLocaleString()}</td>
+                          <td className="border px-2 py-1">
+                            <div className="font-medium text-slate-900">{account.code}</div>
+                            <div className="text-xs text-slate-500">{account.label}</div>
+                          </td>
+                          <td className="border px-2 py-1">
+                            {Object.entries(account.localBreakdown).map(([currency, amount]) => (
+                              <div key={currency} className="text-xs text-slate-600">
+                                {currency} {amount.toLocaleString()}
+                              </div>
+                            ))}
+                          </td>
+                          <td className="border px-2 py-1 text-right">
+                            {account.groupAmount.toLocaleString(undefined, {
+                              style: "currency",
+                              currency: groupCurrency,
+                            })}
+                          </td>
                         </tr>
                       ))}
-                      <tr>
-                        <td className="border px-2 py-1 bg-slate-50 text-right" colSpan={3}>
-                          <span className="font-semibold">Subtotal {category}</span>
+                      <tr className="bg-slate-50">
+                        <td className="border px-2 py-1 text-right" colSpan={3}>
+                          <span className="font-semibold">Subtotal {category.category}</span>
                         </td>
-                        <td className="border px-2 py-1 text-right bg-slate-50 font-semibold">
-                          {balanceSheet[category].total.toLocaleString()}
+                        <td className="border px-2 py-1 text-right font-semibold">
+                          {category.subtotal.toLocaleString(undefined, {
+                            style: "currency",
+                            currency: groupCurrency,
+                          })}
                         </td>
                       </tr>
-                    </>
+                    </Fragment>
                   ))}
                   <tr className="font-bold bg-slate-200">
-                    <td colSpan={3} className="border px-2 py-1 text-right">Total</td>
+                    <td colSpan={3} className="border px-2 py-1 text-right">
+                      Total
+                    </td>
                     <td className="border px-2 py-1 text-right">
-                      {Object.values(balanceSheet).reduce((acc, cur) => acc + cur.total, 0).toLocaleString()}
+                      {balanceData.total.toLocaleString(undefined, {
+                        style: "currency",
+                        currency: groupCurrency,
+                      })}
                     </td>
                   </tr>
                 </tbody>

@@ -53,10 +53,13 @@ export interface ChartMapping {
 export interface Adjustment {
   id: string;
   type: 'manual' | 'elimination' | 'reclassification';
-  companyId: string;
+  companyId: string | null;
   accountId: string;
-  amount: number;
-  currency: string;
+  period: string;
+  sourceAmount: number;
+  sourceCurrency: string;
+  groupAmount: number;
+  groupCurrency: string;
   description: string;
   reference?: string;
   createdBy: string;
@@ -73,6 +76,16 @@ export interface ConsolidationPeriod {
   currency: string;
 }
 
+export interface ExchangeRate {
+  id: string;
+  period: string;
+  fromCurrency: string;
+  toCurrency: string;
+  rate: number;
+  source?: string;
+  updatedAt: string;
+}
+
 export interface AppState {
   companies: Company[];
   subconsos: Subconso[];
@@ -80,6 +93,7 @@ export interface AppState {
   trialBalances: TrialBalance[];
   chartMappings: ChartMapping[];
   adjustments: Adjustment[];
+  exchangeRates: ExchangeRate[];
   currentPeriod: ConsolidationPeriod | null;
   activeSubconsoId: string;
   loading: boolean;
